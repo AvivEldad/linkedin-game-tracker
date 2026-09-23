@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Games Log</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  :root {
+    --paper: #F7F5EF;
+    --ink: #1C1B1F;
+    --ink-soft: #5B5A63;
+    --line: #E3E0D6;
+    --card: #FFFFFF;
+
+    --queens: #7C3AED;
+    --tango: #0E9C97;
+    --pinpoint: #C9970E;
+    --crossclimb: #2563EB;
+    --zip: #16A34A;
+    --default-accent: #1C1B1F;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  header.page {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 40px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 24px;
+  }
+
+  header.page h1 {
+    font-family: 'Source Serif 4', serif;
+    font-weight: 600;
+    font-size: 34px;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+
+  header.page .subtitle {
+    color: var(--ink-soft);
+    font-size: 14px;
+    max-width: 420px;
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 14px;
+    margin-bottom: 48px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 18px 16px;
+    border-top: 3px solid var(--accent, var(--default-accent));
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+  }
+  .card:hover { border-color: var(--accent, var(--default-accent)); }
+  .card.active { border-color: var(--accent, var(--default-accent)); background: #FCFCFA; }
+
+  .card .game-name {
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 10px;
+  }
+
+  .card .place {
+    font-family: 'Source Serif 4', serif;
+    font-size: 30px;
+    font-weight: 600;
+    line-height: 1;
+  }
+  .card .place .hash { color: var(--ink-soft); font-size: 18px; font-weight: 500; }
+
+  .card .diff {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  .card .diff.faster { color: #16794F; }
+  .card .diff.slower { color: #B4432B; }
+
+  .card .date {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--ink-soft);
+  }
+
+  section.trend {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 40px;
+  }
+
+  section.trend h2 {
+    font-family: 'Source Serif 4', serif;
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  section.trend .sub {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-bottom: 18px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  th {
+    color: var(--ink-soft);
+    font-weight: 500;
+    font-size: 12px;
+  }
+  td.num, th.num { text-align: right; }
+
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--ink-soft);
+  }
+  .empty h2 {
+    font-family: 'Source Serif 4', serif;
+    color: var(--ink);
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="page">
+      <div>
+        <h1>Games Log</h1>
+        <div class="subtitle">Daily place and completion time across your LinkedIn puzzles.</div>
+      </div>
+    </header>
+
+    <div id="cards" class="cards"></div>
+
+    <section class="trend" id="trend-section" style="display:none;">
+      <h2 id="trend-title">Trend</h2>
+      <div class="sub">Your time vs. the daily average, most recent first on the right.</div>
+      <canvas id="trendChart" height="90"></canvas>
+    </section>
+
+    <section class="trend" id="stats-section" style="display:none;">
+      <h2>All-time stats</h2>
+      <div class="sub">Since you started logging.</div>
+      <table id="statsTable">
+        <thead>
+          <tr><th>Game</th><th class="num">Entries</th><th class="num">Best place</th><th class="num">Avg place</th><th class="num">Avg vs. average</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <div id="empty" class="empty" style="display:none;">
+      <h2>No entries yet</h2>
+      <p>Add a row to games_log.xlsx and refresh this page.</p>
+    </div>
+    <div id="load-error" class="empty" role="alert" style="display:none;">
+      <h2>Could not load your results</h2>
+      <p>Check that the backend is running, then refresh this page.</p>
+    </div>
+  </div>
+
+<script>
+const ACCENTS = { Queens: '--queens', Tango: '--tango', Pinpoint: '--pinpoint', Crossclimb: '--crossclimb', Zip: '--zip' };
+
+let chart = null;
+let selectedGame = null;
+let historyCache = {};
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Request failed: ' + url);
+  return res.json();
+}
+
+function fmtTime(seconds) {
+  if (seconds === null || seconds === undefined || isNaN(seconds)) return '—';
+  const s = Math.round(seconds);
+  const m = Math.floor(Math.abs(s) / 60);
+  const sec = Math.abs(s) % 60;
+  return (s < 0 ? '-' : '') + m + ':' + String(sec).padStart(2, '0');
+}
+
+function accentVar(game) {
+  const varName = ACCENTS[game];
+  return varName ? `var(${varName})` : 'var(--default-accent)';
+}
+
+async function renderCards() {
+  const summary = await fetchJSON('/api/summary');
+  const container = document.getElementById('cards');
+  container.innerHTML = '';
+
+  if (summary.length === 0) {
+    document.getElementById('empty').style.display = 'block';
+    return;
+  }
+
+  summary.forEach(row => {
+    const diff = row.diff_seconds;
+    const diffClass = diff === null || diff === undefined ? '' : (diff <= 0 ? 'faster' : 'slower');
+    const diffText = diff === null || diff === undefined
+      ? 'no avg time logged'
+      : (diff <= 0 ? fmtTime(Math.abs(diff)) + ' faster than avg' : fmtTime(diff) + ' slower than avg');
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.setProperty('--accent', accentVar(row.Game));
+    card.innerHTML = `
+      <div class="game-name">${row.Game}</div>
+      <div class="place"><span class="hash">#</span>${row.Place ?? '—'}</div>
+      <div class="diff ${diffClass}">${diffText}</div>
+      <div class="date">${row.Date}</div>
+    `;
+    card.addEventListener('click', () => selectGame(row.Game).catch(showLoadError));
+    container.appendChild(card);
+  });
+
+  if (!selectedGame) await selectGame(summary[0].Game);
+}
+
+async function selectGame(game) {
+  selectedGame = game;
+  document.querySelectorAll('.card').forEach(c => {
+    c.classList.toggle('active', c.querySelector('.game-name').textContent === game);
+  });
+
+  if (!historyCache[game]) {
+    historyCache[game] = await fetchJSON('/api/history?game=' + encodeURIComponent(game));
+  }
+  const rows = historyCache[game];
+
+  document.getElementById('trend-section').style.display = 'block';
+  document.getElementById('trend-title').textContent = game;
+
+  const labels = rows.map(r => r.Date);
+  const mine = rows.map(r => r.my_time_seconds);
+  const avg = rows.map(r => r.avg_time_seconds);
+
+  const ctx = document.getElementById('trendChart').getContext('2d');
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Your time',
+          data: mine,
+          borderColor: '#1C1B1F',
+          backgroundColor: '#1C1B1F',
+          tension: 0.25,
+          pointRadius: 3,
+        },
+        {
+          label: 'Average time',
+          data: avg,
+          borderColor: '#B7B4A8',
+          backgroundColor: '#B7B4A8',
+          borderDash: [4, 4],
+          tension: 0.25,
+          pointRadius: 2,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'Inter' } } } },
+      scales: {
+        y: {
+          reverse: false,
+          ticks: { callback: v => fmtTime(v) },
+          title: { display: true, text: 'Time' },
+        },
+      },
+    },
+  });
+}
+
+async function renderStats() {
+  const stats = await fetchJSON('/api/stats');
+  if (stats.length === 0) return;
+  document.getElementById('stats-section').style.display = 'block';
+  const tbody = document.querySelector('#statsTable tbody');
+  tbody.innerHTML = '';
+  stats.forEach(s => {
+    const tr = document.createElement('tr');
+    const diff = s.avg_diff_seconds;
+    const diffText = diff === null || diff === undefined ? '—' : (diff <= 0 ? fmtTime(Math.abs(diff)) + ' faster' : fmtTime(diff) + ' slower');
+    tr.innerHTML = `
+      <td>${s.Game}</td>
+      <td class="num">${s.entries}</td>
+      <td class="num">#${s.best_place}</td>
+      <td class="num">${s.avg_place}</td>
+      <td class="num">${diffText}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function showLoadError(err) {
+  console.error(err);
+  document.getElementById('load-error').style.display = 'block';
+}
+
+Promise.all([renderCards(), renderStats()]).catch(showLoadError);
+</script>
+</body>
+</html>
