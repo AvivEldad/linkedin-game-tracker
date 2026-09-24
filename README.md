@@ -1,33 +1,37 @@
 # Games Log
 
-A tiny local app: you fill in `games_log.xlsx` each day, the backend reads
+A tiny local app: you fill in `games_log.csv` each day, the backend reads
 it, and the frontend shows your stats and trends.
 
 ## Structure
 
 ```
 games-tracker-app/
-├── games_log.xlsx      <- you edit this daily
+├── games_log.csv      <- you edit this daily
 ├── backend/
-│   ├── main.py          <- FastAPI: reads the Excel, serves JSON + the frontend
+│   ├── main.py          <- FastAPI: reads the CSV, serves JSON + the frontend
 │   └── requirements.txt
 └── frontend/
     └── index.html        <- the dashboard (served automatically by the backend)
 ```
 
-## The Excel file
+## The CSV file
 
-Open `games_log.xlsx`. Sheet **"Log"** has these columns:
+Open `games_log.csv` in a text editor or spreadsheet app. It has these columns:
 
 | Date | Game | Place | My Time | Avg Time | Diff vs Avg (sec) |
 |------|------|-------|---------|----------|--------------------|
 
-- One row per game per day (5 rows/day for 5 games).
-- **My Time** / **Avg Time**: type as `mm:ss` (e.g. `1:05`) — the cell is
-  already formatted to show it that way.
-- **Diff vs Avg** fills in automatically, don't type into it.
-- The **"Legend"** sheet (second tab) has the same instructions inline.
-- Yellow rows are the example — delete them once you're using your own data.
+- One row per game per day.
+- **Date**: use `YYYY-MM-DD` (e.g. `2026-09-14`).
+- **My Time** / **Avg Time**: use `m:ss` (e.g. `1:05`). `h:mm:ss` is also supported.
+- **Diff vs Avg (sec)**: you can leave this blank; the backend calculates it
+  and saves it back to column F when the dashboard loads or refreshes
+  (positive = slower than average). Save your edits before refreshing.
+  Missing or invalid times leave the difference blank.
+- Leave missing times or places empty.
+- Save as a comma-separated UTF-8 CSV, keeping the header row. CSV files
+  do not store Excel formatting, formulas, or additional sheets.
 - Keep game names spelled exactly the same each time (e.g. always
   "Queens", not "queens") — the app groups by this text.
 
@@ -41,7 +45,7 @@ python main.py
 
 Then open **http://localhost:8000** in your browser.
 
-Each time you add rows to the Excel file and refresh the browser tab, the
+Each time you add rows to the CSV file and refresh the browser tab, the
 dashboard updates — no restart needed.
 
 ## What the dashboard shows
@@ -56,4 +60,4 @@ dashboard updates — no restart needed.
 This is intentionally the simple version. When you're ready to swap in the
 automated LinkedIn scraper + Postgres setup from earlier, only `main.py`'s
 `load_log()` function needs to change (read from the database instead of
-the Excel file) — the API shape and the whole frontend stay the same.
+the CSV file) — the API shape and the whole frontend stay the same.

@@ -1,9 +1,9 @@
 """
 Backend for the LinkedIn Games tracker.
 
-Reads games_log.xlsx (the "Log" sheet) and serves it as JSON for the
+Reads games_log.csv and serves it as JSON for the
 frontend. Re-reads the file on every request, so you can just keep editing
-the Excel file and refresh the browser to see updates -- no restart needed.
+CSV file and refresh the browser to see updates -- no restart needed.
 
 Run:
     pip install -r requirements.txt
@@ -12,8 +12,11 @@ Run:
 Then open http://localhost:8000
 """
 
-import datetime
+import re
+import io
+import tempfile
 from pathlib import Path
+from threading import Lock
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -21,8 +24,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-EXCEL_PATH = BASE_DIR / "games_log.xlsx"
+CSV_PATH = BASE_DIR / "games_log.csv"
 FRONTEND_DIR = BASE_DIR / "frontend"
+LOG_LOCK = Lock()
 
 app = FastAPI(title="LinkedIn Games Tracker")
 
@@ -35,29 +39,66 @@ app.add_middleware(
 
 
 def load_log() -> pd.DataFrame:
-    if not EXCEL_PATH.exists():
-        raise HTTPException(status_code=500, detail=f"Excel file not found at {EXCEL_PATH}")
+    # Dashboard requests may arrive concurrently; serialize read/update cycles.
+    with LOG_LOCK:
+        return _load_log()
 
-    df = pd.read_excel(EXCEL_PATH, sheet_name="Log", engine="openpyxl")
+
+def _load_log() -> pd.DataFrame:
+    if not CSV_PATH.exists():
+        raise HTTPException(status_code=500, detail=f"CSV file not found at {CSV_PATH}")
+
+    original = CSV_PATH.read_bytes()
+    source = pd.read_csv(io.BytesIO(original), encoding="utf-8-sig", dtype=str,
+                         keep_default_na=False)
+    df = source.replace("", None).copy()
     df = df.dropna(subset=["Date", "Game"])  # ignore blank template rows
 
     def to_seconds(value):
         if pd.isna(value):
             return None
-        if isinstance(value, datetime.time):
-            return value.hour * 3600 + value.minute * 60 + value.second
-        if isinstance(value, datetime.datetime):
-            return value.hour * 3600 + value.minute * 60 + value.second
+        value = str(value).strip()
+        if re.fullmatch(r"\d+:[0-5]\d", value):
+            minutes, seconds = map(int, value.split(":"))
+            return minutes * 60 + seconds
+        if re.fullmatch(r"\d+:[0-5]\d:[0-5]\d", value):
+            hours, minutes, seconds = map(int, value.split(":"))
+            return hours * 3600 + minutes * 60 + seconds
         return None
 
     df["my_time_seconds"] = df["My Time"].apply(to_seconds)
     df["avg_time_seconds"] = df["Avg Time"].apply(to_seconds)
     df["diff_seconds"] = df["my_time_seconds"] - df["avg_time_seconds"]
-    # Excel formula caches may be empty until Excel recalculates the workbook.
+    # Recalculate differences so the CSV's derived column can be left blank.
     df["Diff vs Avg (sec)"] = df["diff_seconds"]
 
     df["Date"] = pd.to_datetime(df["Date"]).dt.date.astype(str)
     df["Place"] = pd.to_numeric(df["Place"], errors="coerce")
+
+    # Only persist the derived column, preserving input text and template rows.
+    differences = df["diff_seconds"].apply(
+        lambda value: "" if pd.isna(value) else str(int(value))
+    ).reindex(source.index, fill_value="")
+    column = "Diff vs Avg (sec)"
+    if column not in source or not source[column].equals(differences):
+        source[column] = differences
+        temporary_path = None
+        try:
+            encoding = "utf-8-sig" if original.startswith(b"\xef\xbb\xbf") else "utf-8"
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding=encoding, newline="", dir=CSV_PATH.parent,
+                suffix=".tmp", delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                source.to_csv(temporary, index=False)
+            if CSV_PATH.read_bytes() != original:
+                raise HTTPException(status_code=409, detail="CSV changed while loading; refresh to retry.")
+            temporary_path.replace(CSV_PATH)
+        except OSError as error:
+            raise HTTPException(status_code=500, detail="Could not update CSV differences. Check that the file is writable and not locked.") from error
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     return df
 
