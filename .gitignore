@@ -1,2 +1,9 @@
 compose.yaml
 README.Docker.md
+
+# Local browser sessions, scraper output, and Python environment files
+.linkedin_profile*/
+results/
+__pycache__/
+*.pyc
+.venv/
