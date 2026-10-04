@@ -1,5 +1,6 @@
 compose.yaml
 README.Docker.md
+test_linkedin_games_scraper.py
 
 # Local browser sessions, scraper output, and Python environment files
 .linkedin_profile*/
