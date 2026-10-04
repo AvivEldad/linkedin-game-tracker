@@ -22,6 +22,7 @@ checkpoints, or anti-bot protections.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import sys
@@ -31,16 +32,35 @@ from pathlib import Path
 from typing import Any
 from urllib import request, error
 
-from playwright.sync_api import sync_playwright, Page, Locator
+from playwright.sync_api import sync_playwright, Page, Locator, TimeoutError as PlaywrightTimeoutError
 
 DEFAULT_GAMES = [
-    "queens",
-    "tango",
     "zip",
-    "mini-sudoku",
     "patches",
+    "mini-sudoku",
+    "tango",
+    "queens",
     "wend",
 ]
+
+CSV_BASE_COLUMNS = [
+    "Date",
+    "Game",
+    "Place",
+    "My Time",
+    "Avg Time",
+    "Diff vs Avg (sec)",
+]
+CSV_EXTRA_COLUMNS = ["Connections Played", "Same Rank"]
+
+GAME_DISPLAY_NAMES = {
+    "zip": "Zip",
+    "patches": "Patches",
+    "mini-sudoku": "Mini Sudoku",
+    "tango": "Tango",
+    "queens": "Queens",
+    "wend": "Wend",
+}
 
 GAME_URL = "https://www.linkedin.com/games/{game}/"
 PROFILE_DIR = Path(".linkedin_profile")
@@ -384,10 +404,11 @@ def collect_full_leaderboard(page: Page, expected_count: int | None, debug: bool
         stable_rounds = stable_rounds + 1 if len(seen) == previous_count else 0
         if stable_rounds >= 5:
             break
-        last = page.locator(selector).last
-        last.scroll_into_view_if_needed()
-        # Scroll the actual scrollable ancestor, or the document when none exists.
-        last.evaluate("""el => {
+        # Resolve and scroll in one synchronous browser evaluation. LinkedIn
+        # can replace rows while Playwright waits for an element to stabilize.
+        page.locator(selector).evaluate_all("""elements => {
+            const el = elements[elements.length - 1];
+            if (!el || !el.isConnected) return;
             let parent = el.parentElement;
             while (parent && parent !== document.body) {
                 if (/auto|scroll/.test(getComputedStyle(parent).overflowY)
@@ -403,6 +424,24 @@ def collect_full_leaderboard(page: Page, expected_count: int | None, debug: bool
     result = summarize_leaderboard(list(seen.values()), expected_count)
     go_back_safely(page)
     return result
+
+
+def open_results(page: Page, game_url: str) -> None:
+    """Use a full navigation to avoid stalled client-side results transitions."""
+    results_url = game_url.rstrip("/") + "/results/"
+    for attempt in range(2):
+        try:
+            page.goto(results_url, wait_until="domcontentloaded", timeout=45_000)
+            page.wait_for_function(
+                """() => /Copy score|Today['\u2019]s\\s+(?:avg|average)|connections? played today/i
+                    .test(document.body?.innerText || '')""",
+                timeout=30_000,
+            )
+            return
+        except PlaywrightTimeoutError:
+            if attempt == 1:
+                raise
+            print(f"Results page stalled; retrying {results_url}")
 
 
 def collect_game(page: Page, game: str, debug: bool) -> dict[str, Any]:
@@ -435,22 +474,11 @@ def collect_game(page: Page, game: str, debug: bool) -> dict[str, Any]:
             item["status"] = "logged_out"
             return item
 
+        landing_text = body_text(page)
         if debug:
-            item["_landing_raw_text"] = body_text(page)[:30000]
-        if game == "zip" and re.search(r"\bSee results\b", body_text(page), re.I):
-            page.goto(url + "results/", wait_until="domcontentloaded", timeout=45_000)
-            page.wait_for_function(
-                "() => /Copy score|Today.s avg|connections played today/i.test(document.body.innerText)",
-                timeout=30_000,
-            )
-        elif click_text_like(page, ["See results", "View results"]):
-            # Results navigation can briefly render only the notifications shell.
-            page.wait_for_function(
-                """() => /solved|your time|my time|achievements|leaderboard|streak|start game/i
-                    .test(document.body.innerText)""",
-                timeout=20_000,
-            )
-            page.wait_for_timeout(1000)
+            item["_landing_raw_text"] = landing_text[:30000]
+        if re.search(r"\b(?:See|View) results\b", landing_text, re.I):
+            open_results(page, url)
 
         main_text = body_text(page)
         main = parse_main_result_text(game, main_text)
@@ -475,7 +503,8 @@ def collect_game(page: Page, game: str, debug: bool) -> dict[str, Any]:
             expected_count=item.get("connections_played_today"),
             debug=debug,
         )
-        item["connections_played_today"] = leaderboard.get("connections_played_today")
+        # Keep the displayed total: leaderboard rows with timed scores can
+        # represent fewer connections than LinkedIn's "played today" count.
         for key in ("my_rank", "same_rank_total", "same_rank_others", "leaderboard_rows_seen", "rank_source", "leaderboard_complete"):
             if leaderboard.get(key) is not None:
                 item[key] = leaderboard[key]
@@ -510,7 +539,7 @@ def collect_game(page: Page, game: str, debug: bool) -> dict[str, Any]:
             f"avg={item.get('today_average_time')} | "
             f"connections={item.get('connections_played_today')} | "
             f"rank={item.get('my_rank')} | "
-            f"same-rank={item.get('same_rank_total')}"
+            f"same-rank-others={item.get('same_rank_others')}"
         )
         return item
 
@@ -525,6 +554,125 @@ def collect_game(page: Page, game: str, debug: bool) -> dict[str, Any]:
         item["error"] = f"{type(exc).__name__}: {exc}"
         print(f"[{game}] ERROR: {exc}", file=sys.stderr)
         return item
+
+
+
+def time_to_seconds(value: str | None) -> int | None:
+    """Convert m:ss or h:mm:ss to total seconds."""
+    if not value:
+        return None
+    parts = value.strip().split(":")
+    if not parts or not all(part.isdigit() for part in parts):
+        return None
+    total = 0
+    for part in parts:
+        total = total * 60 + int(part)
+    return total
+
+
+def csv_game_name(slug: str) -> str:
+    return GAME_DISPLAY_NAMES.get(slug, slug.replace("-", " ").title())
+
+
+def build_csv_values(game: dict[str, Any], date_value: str) -> dict[str, str]:
+    my_time = game.get("my_time")
+    avg_time = game.get("today_average_time")
+    my_seconds = time_to_seconds(my_time)
+    avg_seconds = time_to_seconds(avg_time)
+    diff = ""
+    if my_seconds is not None and avg_seconds is not None:
+        diff = str(my_seconds - avg_seconds)
+
+    return {
+        "Date": date_value,
+        "Game": csv_game_name(str(game.get("game", ""))),
+        "Place": "" if game.get("my_rank") is None else str(game["my_rank"]),
+        "My Time": "" if my_time is None else str(my_time),
+        "Avg Time": "" if avg_time is None else str(avg_time),
+        "Diff vs Avg (sec)": diff,
+        "Connections Played": (
+            "" if game.get("connections_played_today") is None
+            else str(game["connections_played_today"])
+        ),
+        "Same Rank": (
+            "" if game.get("same_rank_others") is None
+            else str(game["same_rank_others"])
+        ),
+    }
+
+
+def update_csv(csv_path: Path, payload: dict[str, Any]) -> tuple[int, int, int]:
+    """
+    Upsert completed game results into CSV using Date + Game as the key.
+
+    Existing extra columns (for example Note) are preserved. Existing non-empty
+    values are not erased when a scraper field is temporarily unavailable.
+    """
+    csv_path = csv_path.resolve()
+    rows: list[dict[str, str]] = []
+    fieldnames: list[str] = []
+
+    if csv_path.exists() and csv_path.stat().st_size > 0:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            fieldnames = list(reader.fieldnames or [])
+            rows = [dict(row) for row in reader]
+
+    if not fieldnames:
+        fieldnames = CSV_BASE_COLUMNS.copy()
+
+    # Preserve all current columns and append only our new columns when missing.
+    for column in CSV_BASE_COLUMNS + CSV_EXTRA_COLUMNS:
+        if column not in fieldnames:
+            fieldnames.append(column)
+
+    # The CSV is daily, so use the machine's local date. On the Linux host, set
+    # the system timezone to Asia/Jerusalem so the date matches the LinkedIn day.
+    date_value = datetime.now().strftime("%d/%m/%Y")
+
+    index: dict[tuple[str, str], int] = {}
+    for i, row in enumerate(rows):
+        key = ((row.get("Date") or "").strip(), (row.get("Game") or "").strip().lower())
+        if key[0] and key[1]:
+            index[key] = i
+
+    inserted = 0
+    updated = 0
+    skipped = 0
+
+    for game in payload.get("games", []):
+        # Do not create a row before the user has actually completed the game.
+        if game.get("status") != "collected" or not game.get("my_time"):
+            skipped += 1
+            continue
+
+        values = build_csv_values(game, date_value)
+        key = (date_value, values["Game"].lower())
+
+        if key in index:
+            row = rows[index[key]]
+            changed = False
+            for column, value in values.items():
+                # Never erase a useful value because one scrape was partial.
+                if value != "" and row.get(column, "") != value:
+                    row[column] = value
+                    changed = True
+            if changed:
+                updated += 1
+        else:
+            row = {column: "" for column in fieldnames}
+            row.update(values)
+            rows.append(row)
+            index[key] = len(rows) - 1
+            inserted += 1
+
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return inserted, updated, skipped
 
 
 def post_to_api(api_url: str, api_token: str | None, payload: dict[str, Any]) -> None:
@@ -558,6 +706,10 @@ def parse_args() -> argparse.Namespace:
         "--debug",
         action="store_true",
         help="Include raw rendered text for parser tuning.",
+    )
+    parser.add_argument(
+        "--csv",
+        help="Optional path to games_log.csv. Completed games are upserted by Date + Game.",
     )
     parser.add_argument("--api-url")
     parser.add_argument("--api-token")
@@ -614,6 +766,13 @@ def main() -> int:
         encoding="utf-8",
     )
     print(f"\nSaved: {output_path}")
+
+    if args.csv:
+        inserted, updated, skipped = update_csv(Path(args.csv), payload)
+        print(
+            f"CSV updated: {Path(args.csv).resolve()} "
+            f"({inserted} inserted, {updated} updated, {skipped} skipped)"
+        )
 
     if args.api_url:
         post_to_api(args.api_url, args.api_token, payload)
