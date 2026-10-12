@@ -1,0 +1,41 @@
+stage 1:
+
+- creating a csv and save manually the data everyday
+- create simple app
+- create docker file
+
+ stage 2:
+- create a scraper script to update the data
+
+stage 3:
+- on the home lab, clone the project
+- test the docker image
+- check volumes and stuff
+
+Stage 4:
+- create automation to run the scraper
+- include updating the csv and github
+- create pipline for data
+
+Stage 5:
+- create pipleine for code
+- improve the code
+
+Stage 6:
+- add db 
+- add nginx
+- create docker compose
+
+Stage 6.1:
+- update readme and create stage explenation page
+
+Stage 7:
+- put it on a website
+- how do I update the files each day?
+
+Stage 8:
+- monitoring
+
+Stage 9:
+- Terraform
+
