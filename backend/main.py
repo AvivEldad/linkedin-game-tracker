@@ -14,6 +14,7 @@ Then open http://localhost:8000
 
 import re
 import io
+import errno
 import tempfile
 from pathlib import Path
 from threading import Lock
@@ -93,7 +94,20 @@ def _load_log() -> pd.DataFrame:
                 source.to_csv(temporary, index=False)
             if CSV_PATH.read_bytes() != original:
                 raise HTTPException(status_code=409, detail="CSV changed while loading; refresh to retry.")
-            temporary_path.replace(CSV_PATH)
+            try:
+                temporary_path.replace(CSV_PATH)
+            except OSError as error:
+                if error.errno != errno.EBUSY:
+                    raise
+                # A Docker single-file bind mount cannot be replaced by rename.
+                # Write through the existing file instead (this is not atomic).
+                updated = temporary_path.read_bytes()
+                with CSV_PATH.open("r+b") as destination:
+                    if destination.read() != original:
+                        raise HTTPException(status_code=409, detail="CSV changed while loading; refresh to retry.")
+                    destination.seek(0)
+                    destination.write(updated)
+                    destination.truncate()
         except OSError as error:
             raise HTTPException(status_code=500, detail="Could not update CSV differences. Check that the file is writable and not locked.") from error
         finally:
