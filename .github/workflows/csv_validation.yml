@@ -1,0 +1,7 @@
+name: Validate data
+on: 
+  pull_request:
+    branches: [main]
+    paths: - '**.csv'
+
+    
