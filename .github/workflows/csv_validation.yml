@@ -3,5 +3,21 @@ on:
   pull_request:
     branches: [main]
     paths: - '**.csv'
+jobs:
+  test-csv:
+    runs-on: ubuntu-latest
+    steps:
+      -name: Checkout repo
+      uses: actions/checkout@v4
 
-    
+      -name: setup python
+      uses: sctions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: pip
+
+      -name: install dependencies
+      run: pip install pandas
+
+      -name: Run validation script
+      run: python validate_csv.py
